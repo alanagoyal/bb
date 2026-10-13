@@ -40,11 +40,12 @@ provider, and directive are all Docs.
 - **Images:** paste or drop PNG, JPEG, GIF, WebP, or SVG files into a document.
   Attachments are stored beside it under `_attachments/` and serialized as
   portable relative Markdown image links.
-- **Raw HTML:** HTML blocks and inline tags retain their source when nearby
-  Markdown is edited. Inline formatting tags such as `<strong>`, `<kbd>`, and
-  `<sub>` display as formatting; other HTML appears as protected source. HTML
-  is not executed in the editor. Use a source editor or `bb docs pull` /
-  `bb docs push` to change the HTML itself.
+- **Raw HTML:** HTML is never dropped or locked. HTML the editor can show
+  without losing anything, such as paragraphs, lists, and tables, displays as
+  normal content. Inline formatting tags such as `<strong>`, `<kbd>`, and
+  `<sub>` display as formatting and keep their source. Other HTML appears as
+  editable source and is saved exactly as typed. HTML is not executed in the
+  editor.
 - **Embedded HTML:** a Markdown block directive renders a sibling HTML file in
   an opaque-origin iframe:
 

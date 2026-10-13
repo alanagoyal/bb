@@ -3,7 +3,6 @@ import { DOMParser, type Schema } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
 import type { MarkdownMarkSpec, MarkdownNodeSpec } from "tiptap-markdown";
 
-type SerializeArgs = Parameters<MarkdownNodeSpec["serialize"]>;
 type InlineToken = { type: string; content: string; nesting: number };
 
 const PHRASING_TAGS = new Set([
@@ -30,26 +29,31 @@ const PHRASING_TAGS = new Set([
   "var",
 ]);
 
-function serializeSource(state: SerializeArgs[0], node: SerializeArgs[1]) {
-  state.text(String(node.attrs.source).replace(/\n$/, ""), false);
-  if (node.isBlock) state.closeBlock(node);
-}
-
-function isEditorTable(source: string, schema: Schema): boolean {
-  if (!/^<table[\s>]/i.test(source)) return false;
-  const parse = (html: string) =>
-    new window.DOMParser().parseFromString(html, "text/html").body;
-  const table = parse(
-    getHTMLFromFragment(
-      DOMParser.fromSchema(schema).parse(parse(source)).content,
-      schema,
-    ),
-  ).firstElementChild;
-  if (!table) return false;
-  table.innerHTML = `\n${table.innerHTML}\n`;
-  return table.outerHTML === source.replace(/\n$/, "");
-}
-
+const STRUCTURAL_TAGS = new Set([
+  "BODY",
+  "COLGROUP",
+  "OL",
+  "TABLE",
+  "TBODY",
+  "TFOOT",
+  "THEAD",
+  "TR",
+  "UL",
+]);
+const TEXT_BLOCK_TAGS = new Set([
+  "BLOCKQUOTE",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "LI",
+  "P",
+  "TD",
+  "TH",
+]);
+const MIN_WIDTH = /^min-width: \d+px;?$/;
 const ENTITIES: Record<string, string> = {
   amp: "&",
   quot: '"',
@@ -58,7 +62,7 @@ const ENTITIES: Record<string, string> = {
   nbsp: "\u00a0",
 };
 
-function decodeAttribute(value: string): string {
+function decodeHtml(value: string): string {
   return value.replace(
     /&(amp|quot|lt|gt|nbsp);/g,
     (_match, name: string) => ENTITIES[name]!,
@@ -68,13 +72,76 @@ function decodeAttribute(value: string): string {
 export function restoreRawHtml(markdown: string): string {
   return markdown
     .replace(
-      /<span data-docs-raw-html="true" data-source="([^"]*)">[^<]*<\/span>/g,
-      (_match, source: string) => decodeAttribute(source),
+      /<pre data-docs-raw-html="true"><code>([^<]*)<\/code><\/pre>/g,
+      (_match, source: string) => decodeHtml(source),
+    )
+    .replace(
+      /<code data-docs-html-source="true">([^<]*)<\/code>/g,
+      (_match, source: string) => decodeHtml(source),
+    )
+    .replace(
+      /<br data-docs-html-break="true" data-source="([^"]*)">/g,
+      (_match, source: string) => decodeHtml(source),
     )
     .replace(
       /<[a-z]+ data-docs-html-open="([^"]*)" data-docs-html-close="[^"]*">/g,
-      (_match, open: string) => decodeAttribute(open),
+      (_match, open: string) => decodeHtml(open),
     );
+}
+
+function parseHtml(html: string): HTMLElement {
+  return new window.DOMParser().parseFromString(html, "text/html").body;
+}
+
+function normalizeHtml(root: HTMLElement): HTMLElement {
+  for (const section of root.querySelectorAll("thead, tbody, tfoot"))
+    section.replaceWith(...section.childNodes);
+  for (const element of root.querySelectorAll("table, col"))
+    if (MIN_WIDTH.test(element.getAttribute("style") ?? ""))
+      element.removeAttribute("style");
+  for (const group of root.querySelectorAll("colgroup"))
+    if ([...group.children].every((col) => col.attributes.length === 0))
+      group.remove();
+  for (const cell of root.querySelectorAll("td, th"))
+    for (const name of ["colspan", "rowspan"])
+      if (cell.getAttribute(name) === "1") cell.removeAttribute(name);
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  while (walker.nextNode())
+    if (walker.currentNode instanceof window.Text) texts.push(walker.currentNode);
+  for (const text of texts) {
+    const parent = text.parentElement!;
+    if (parent.closest("pre")) continue;
+    text.data = text.data.replace(/[ \t\r\n\f]+/g, " ");
+    if (STRUCTURAL_TAGS.has(parent.tagName) && text.data === " ") text.remove();
+    else if (TEXT_BLOCK_TAGS.has(parent.tagName)) {
+      if (!text.previousSibling) text.data = text.data.trimStart();
+      if (!text.nextSibling) text.data = text.data.trimEnd();
+      if (!text.data) text.remove();
+    }
+  }
+  for (const cell of root.querySelectorAll("td, th, li")) {
+    const only = cell.firstChild;
+    if (
+      only === cell.lastChild &&
+      only instanceof window.HTMLParagraphElement &&
+      only.attributes.length === 0
+    )
+      only.replaceWith(...only.childNodes);
+  }
+  return root;
+}
+
+function isLossless(source: string, schema: Schema): boolean {
+  const original = parseHtml(source);
+  if (!original.textContent?.trim()) return false;
+  const rendered = parseHtml(
+    getHTMLFromFragment(
+      DOMParser.fromSchema(schema).parse(original).content,
+      schema,
+    ),
+  );
+  return normalizeHtml(rendered).isEqualNode(normalizeHtml(original));
 }
 
 function phrasingTag(source: string): string | undefined {
@@ -126,7 +193,7 @@ function pairTags(tokens: InlineToken[]): Map<number, number> {
 const pairsByTokens = new WeakMap<InlineToken[], Map<number, number>>();
 
 function stripPastedSources(html: string): string {
-  const body = new window.DOMParser().parseFromString(html, "text/html").body;
+  const body = parseHtml(html);
   for (const element of body.querySelectorAll("[data-docs-html-open]")) {
     element.removeAttribute("data-docs-html-open");
     element.removeAttribute("data-docs-html-close");
@@ -134,62 +201,47 @@ function stripPastedSources(html: string): string {
   return body.innerHTML;
 }
 
-export const RawHtml = Node.create({
-  name: "rawHtml",
+export const RawHtmlBlock = Node.create({
+  name: "rawHtmlBlock",
   group: "block",
-  atom: true,
-  isolating: true,
-  addAttributes() {
-    return {
-      source: {
-        default: "",
-        parseHTML: (element) => element.getAttribute("data-source") ?? "",
-      },
-    };
-  },
+  content: "text*",
+  marks: "",
+  code: true,
+  defining: true,
   parseHTML() {
-    return [{ tag: "div[data-docs-raw-html]" }];
-  },
-  renderHTML({ node }) {
-    const source = String(node.attrs.source);
     return [
-      "div",
-      { "data-docs-raw-html": "true", "data-source": source },
-      ["pre", {}, source],
+      {
+        tag: "pre[data-docs-raw-html]",
+        preserveWhitespace: "full",
+        priority: 60,
+      },
     ];
   },
-  addNodeView() {
-    return ({ node }) => {
-      const dom = document.createElement("section");
-      dom.className = "simple-html-embed";
-      dom.contentEditable = "false";
-      const header = document.createElement("div");
-      header.className = "simple-html-embed-header";
-      header.textContent = "HTML block · preserved · edit in source";
-      const source = document.createElement("pre");
-      source.textContent = String(node.attrs.source);
-      dom.append(header, source);
-      return { dom };
-    };
+  renderHTML() {
+    return ["pre", { "data-docs-raw-html": "true" }, ["code", 0]];
   },
   addStorage() {
     return {
-      tables: new Map<string, boolean>(),
+      lossless: new Map<string, boolean>(),
       markdown: {
-        serialize: serializeSource,
+        serialize(state, node) {
+          state.text(node.textContent, false);
+          state.closeBlock(node);
+        },
         parse: {
           setup(markdown) {
             const { schema, storage } = this.editor;
-            const previous: Map<string, boolean> = storage.rawHtml.tables;
-            const tables = new Map<string, boolean>();
-            storage.rawHtml.tables = tables;
-            const isEditable = (source: string) => {
-              const editable =
-                tables.get(source) ??
+            const previous: Map<string, boolean> =
+              storage.rawHtmlBlock.lossless;
+            const lossless = new Map<string, boolean>();
+            storage.rawHtmlBlock.lossless = lossless;
+            const isRich = (source: string) => {
+              const rich =
+                lossless.get(source) ??
                 previous.get(source) ??
-                isEditorTable(source, schema);
-              tables.set(source, editable);
-              return editable;
+                isLossless(source, schema);
+              lossless.set(source, rich);
+              return rich;
             };
             markdown.renderer.rules.html_block = (tokens, index) => {
               const source = tokens[index]!.content;
@@ -197,11 +249,11 @@ export const RawHtml = Node.create({
                 /^<div data-simple-html-embed="true" data-src="[^"]*" data-height="\d+"><\/div>\s*$/.test(
                   source,
                 ) ||
-                isEditable(source)
+                isRich(source)
               ) {
                 return source;
               }
-              return `<div data-docs-raw-html="true" data-source="${markdown.utils.escapeHtml(source)}"><pre>${markdown.utils.escapeHtml(source)}</pre></div>`;
+              return `<pre data-docs-raw-html="true"><code>${markdown.utils.escapeHtml(source.replace(/\n$/, ""))}</code></pre>`;
             };
           },
         },
@@ -210,37 +262,57 @@ export const RawHtml = Node.create({
   },
 });
 
-export const RawInlineHtml = RawHtml.extend({
-  name: "rawInlineHtml",
+export const RawHtmlBreak = Node.create({
+  name: "rawHtmlBreak",
   group: "inline",
   inline: true,
+  atom: true,
+  selectable: false,
+  addAttributes() {
+    return {
+      source: {
+        default: "<br>",
+        parseHTML: (element) => element.getAttribute("data-source") ?? "<br>",
+      },
+    };
+  },
   parseHTML() {
-    return [{ tag: "span[data-docs-raw-html]" }];
+    return [{ tag: "br[data-docs-html-break]", priority: 60 }];
   },
   renderHTML({ node }) {
-    const source = String(node.attrs.source);
     return [
-      "span",
-      { "data-docs-raw-html": "true", "data-source": source },
-      source,
+      "br",
+      {
+        "data-docs-html-break": "true",
+        "data-source": String(node.attrs.source),
+      },
     ];
-  },
-  addNodeView() {
-    return ({ node }) => {
-      const source = String(node.attrs.source);
-      if (/^<br\s*\/?>$/i.test(source))
-        return { dom: document.createElement("br") };
-      const dom = document.createElement("span");
-      dom.contentEditable = "false";
-      dom.title = "HTML · preserved · edit in source";
-      dom.textContent = source;
-      return { dom };
-    };
   },
   addStorage() {
     return {
       markdown: {
-        serialize: serializeSource,
+        serialize(state, node) {
+          state.text(String(node.attrs.source), false);
+        },
+      } satisfies MarkdownNodeSpec,
+    };
+  },
+});
+
+export const RawHtmlInline = Mark.create({
+  name: "rawHtmlInline",
+  priority: 1,
+  inclusive: false,
+  parseHTML() {
+    return [{ tag: "code[data-docs-html-source]", priority: 60 }];
+  },
+  renderHTML() {
+    return ["code", { "data-docs-html-source": "true" }, 0];
+  },
+  addStorage() {
+    return {
+      markdown: {
+        serialize: { open: "", close: "", escape: false },
         parse: {
           setup(markdown) {
             const escape = markdown.utils.escapeHtml;
@@ -250,23 +322,24 @@ export const RawInlineHtml = RawHtml.extend({
                 pairs = pairTags(tokens);
                 pairsByTokens.set(tokens, pairs);
               }
-              const token = tokens[index]!;
+              const source = tokens[index]!.content;
               const close = pairs.get(index);
               if (close === -1) return "</span>";
-              if (close !== undefined) {
-                return `<span data-docs-html-open="${escape(token.content)}" data-docs-html-close="${escape(tokens[close]!.content)}">`;
-              }
-              return `<span data-docs-raw-html="true" data-source="${escape(token.content)}"></span>`;
+              if (close !== undefined)
+                return `<span data-docs-html-open="${escape(source)}" data-docs-html-close="${escape(tokens[close]!.content)}">`;
+              if (/^<br\s*\/?>$/i.test(source))
+                return `<br data-docs-html-break="true" data-source="${escape(source)}">`;
+              return `<code data-docs-html-source="true">${escape(source)}</code>`;
             };
           },
         },
-      } satisfies MarkdownNodeSpec,
+      } satisfies MarkdownMarkSpec,
     };
   },
 });
 
-export const RawHtmlMark = Mark.create({
-  name: "rawHtmlMark",
+export const RawHtmlFormatting = Mark.create({
+  name: "rawHtmlFormatting",
   priority: 1000,
   excludes: "",
   addAttributes() {
