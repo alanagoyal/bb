@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { Editor } from "@tiptap/core";
 import { DOMParser as ProseMirrorDOMParser } from "@tiptap/pm/model";
+import Image from "@tiptap/extension-image";
+import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
 import Table from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
@@ -20,6 +22,8 @@ function createEditor(content: string) {
   return new Editor({
     extensions: [
       StarterKit,
+      Link.configure({ openOnClick: false, autolink: true }),
+      Image,
       Table,
       TableRow,
       TableHeader,
@@ -28,7 +32,7 @@ function createEditor(content: string) {
       RawHtmlBreak,
       RawHtmlInline,
       RawHtmlFormatting,
-      Markdown.configure({ html: true }),
+      Markdown.configure({ html: true, linkify: true }),
     ],
     content,
   });
@@ -71,6 +75,39 @@ describe("raw HTML", () => {
       expect(saved).toContain("Edited Before.");
       editor.commands.setContent(saved);
       expect(save(editor)).toBe(saved);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each([
+    "<table><tr><th>Logo</th><th>Name</th></tr><tr><td><img src=\"logo.png\" alt=\"logo\"></td><td>Acme</td></tr></table>",
+    "<table><tr><th>Code</th><th>Note</th></tr><tr><td><code>a | b</code></td><td>pipe</td></tr></table>",
+    '<h2>Demo</h2>\n<img src="demo.gif" alt="Demo">',
+    "<pre><code>before\n```\nafter</code></pre>",
+    "<h2>Line one<br>Line two</h2>",
+    '<pre data-docs-raw-html="true"><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></pre>',
+  ])("keeps HTML the Markdown save would change as source: %s", (html) => {
+    const content = `Before.\n\n${html}\n\nAfter.`;
+    const editor = createEditor(content);
+    try {
+      editor.commands.insertContentAt(1, "Edited ");
+      expect(save(editor)).toBe(`Edited ${content}`);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each([
+    'Text <code data-docs-html-source="true">&lt;img src=x onerror=alert(1)&gt;</code> end.',
+    'Break <br data-docs-html-break="true" data-source="&lt;img src=x onerror=alert(1)&gt;"> end.',
+    '```\n<code data-docs-html-source="true">&lt;script&gt;alert(1)&lt;/script&gt;</code>\n```',
+    '`<br data-docs-html-break="true" data-source="&lt;br&gt;">`',
+  ])("never decodes marker-like text from the file: %s", (content) => {
+    const editor = createEditor(`Before.\n\n${content}`);
+    try {
+      editor.commands.insertContentAt(1, "Edited ");
+      expect(save(editor)).toBe(`Edited Before.\n\n${content}`);
     } finally {
       editor.destroy();
     }
@@ -170,6 +207,7 @@ describe("raw HTML", () => {
 
   it.each([
     'Anchor <a name="top"></a> here.',
+    "Press <kbd> </kbd> to pause.",
     "Bad <b>a **c</b> d** end.",
     "Mis-nested <b>a <i>b</b> c</i> end.",
     "<video controls>fallback</video> after.",
@@ -257,13 +295,12 @@ describe("raw HTML", () => {
     }
   });
 
-  it("drops hidden HTML sources from pasted content", () => {
+  it.each([
+    `<p>see <span data-docs-html-open='<a href="https://evil.example" onmouseover="alert(1)">' data-docs-html-close="</a>" data-docs-html-mark="forged">this</span> ok</p>`,
+    `<p>see<br data-docs-html-break="forged" data-source='<img src="https://evil.example/t.gif">'>this ok</p>`,
+  ])("does not turn pasted HTML into hidden raw HTML: %s", (html) => {
     const editor = createEditor("");
     try {
-      let html = `<p>see <span data-docs-html-open='<a href="https://evil.example" onmouseover="alert(1)">' data-docs-html-close="</a>">this</span> ok</p>`;
-      editor.view.someProp("transformPastedHTML", (transform) => {
-        html = transform(html, editor.view);
-      });
       const pasted = new window.DOMParser().parseFromString(html, "text/html");
       editor.view.dispatch(
         editor.state.tr.replaceSelection(
@@ -272,7 +309,7 @@ describe("raw HTML", () => {
           ),
         ),
       );
-      expect(save(editor)).toBe("see this ok");
+      expect(save(editor)).not.toMatch(/evil\.example|<img|<a /);
     } finally {
       editor.destroy();
     }

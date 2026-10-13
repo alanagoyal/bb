@@ -44,8 +44,8 @@ provider, and directive are all Docs.
   without losing anything, such as paragraphs, lists, and tables, displays as
   normal content. Inline formatting tags such as `<strong>`, `<kbd>`, and
   `<sub>` display as formatting and keep their source. Other HTML appears as
-  editable source and is saved exactly as typed. HTML is not executed in the
-  editor.
+  editable source and is saved as typed, except that runs of whitespace inside
+  an inline tag collapse to one space. HTML is not executed in the editor.
 - **Embedded HTML:** a Markdown block directive renders a sibling HTML file in
   an opaque-origin iframe:
 
