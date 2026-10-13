@@ -286,10 +286,10 @@ describe("raw HTML", () => {
     const editor = createEditor("");
     try {
       const started = performance.now();
-      editor.storage.markdown.parser.parse(
+      editor.storage.markdown.parser.md.render(
         `x${'<a href="#">'.repeat(20_000)}`,
       );
-      expect(performance.now() - started).toBeLessThan(3_000);
+      expect(performance.now() - started).toBeLessThan(2_000);
     } finally {
       editor.destroy();
     }
