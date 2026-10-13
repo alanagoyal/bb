@@ -41,9 +41,10 @@ provider, and directive are all Docs.
   Attachments are stored beside it under `_attachments/` and serialized as
   portable relative Markdown image links.
 - **Raw HTML:** HTML blocks and inline tags retain their source when nearby
-  Markdown is edited. Blocks appear as protected source placeholders; inline
-  tags appear as protected text. They are not executed in the editor. Use a
-  source editor or `bb docs pull` / `bb docs push` to change the HTML itself.
+  Markdown is edited. Inline formatting tags such as `<strong>`, `<kbd>`, and
+  `<sub>` display as formatting; other HTML appears as protected source. HTML
+  is not executed in the editor. Use a source editor or `bb docs pull` /
+  `bb docs push` to change the HTML itself.
 - **Embedded HTML:** a Markdown block directive renders a sibling HTML file in
   an opaque-origin iframe:
 

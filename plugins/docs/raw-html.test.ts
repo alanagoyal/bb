@@ -3,7 +3,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { describe, expect, it } from "vitest";
-import { RawHtml, RawInlineHtml } from "./raw-html";
+import { RawHtml, RawHtmlMark, RawInlineHtml } from "./raw-html";
 
 function createEditor(content: string) {
   return new Editor({
@@ -11,6 +11,7 @@ function createEditor(content: string) {
       StarterKit,
       RawHtml,
       RawInlineHtml,
+      RawHtmlMark,
       Markdown.configure({ html: true }),
     ],
     content,
@@ -26,6 +27,8 @@ describe("raw HTML blocks", () => {
     "<!-- keep this comment -->",
     "<script>window.untrusted = true;</script>",
     '<div onclick="alert(1)"><img src="missing" onerror="alert(2)"></div>',
+    '> <div>\n> <video src="/demo.mp4"></video>\n> </div>',
+    '- Item\n\n  <div>\n  <video src="/demo.mp4"></video>\n  </div>',
   ])("retains exact source across edits and repeated loads: %s", (html) => {
     const editor = createEditor(`Before.\n\n${html}\n\nAfter.`);
     try {
@@ -69,6 +72,60 @@ describe("raw HTML blocks", () => {
       expect(saved).toContain(first);
       expect(saved).toContain(second);
       expect(saved.indexOf(first)).toBeLessThan(saved.indexOf(second));
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each([
+    ["<strong>formatted</strong>", "strong", "formatted"],
+    ["<b>bold <i>both</i></b>", "b i", "both"],
+    ["<kbd>Ctrl</kbd>", "kbd", "Ctrl"],
+    ["<sub>2</sub>", "sub", "2"],
+    ['<a href="https://x.dev" target="_blank">docs</a>', "a", "docs"],
+    ["<span>**bold** in span</span>", "span strong", "bold"],
+  ])(
+    "displays inline formatting tag %s and saves its exact source",
+    (html, selector, text) => {
+      const content = `Before ${html} after.`;
+      const editor = createEditor(content);
+      try {
+        expect(editor.view.dom.querySelector(selector)?.textContent).toBe(
+          text,
+        );
+        expect(editor.view.dom.textContent).not.toContain("<");
+        expect(editor.view.dom.querySelector("[href]")).toBeNull();
+        editor.commands.insertContentAt(1, "Edited ");
+        const saved: string = editor.storage.markdown.getMarkdown();
+        expect(saved).toBe(`Edited ${content}`);
+        editor.commands.setContent(saved);
+        expect(editor.storage.markdown.getMarkdown()).toBe(saved);
+      } finally {
+        editor.destroy();
+      }
+    },
+  );
+
+  it("displays a line break for inline br", () => {
+    const editor = createEditor("one<br>two");
+    try {
+      expect(editor.view.dom.querySelector("p br")).not.toBeNull();
+      expect(editor.view.dom.textContent).toBe("onetwo");
+      expect(editor.storage.markdown.getMarkdown()).toBe("one<br>two");
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each([
+    'Anchor <a name="top"></a> here.',
+    "Bad <b>a **c</b> d** end.",
+    "<video controls>fallback</video> after.",
+  ])("shows unsupported or unpaired inline HTML as source: %s", (content) => {
+    const editor = createEditor(content);
+    try {
+      expect(editor.view.dom.textContent).toContain("<");
+      expect(editor.storage.markdown.getMarkdown()).toBe(content);
     } finally {
       editor.destroy();
     }
