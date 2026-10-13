@@ -1,4 +1,10 @@
-import { Mark, Node, mergeAttributes } from "@tiptap/core";
+import {
+  Mark,
+  Node,
+  getHTMLFromFragment,
+  mergeAttributes,
+} from "@tiptap/core";
+import { DOMParser, type Schema } from "@tiptap/pm/model";
 import type { MarkdownMarkSpec, MarkdownNodeSpec } from "tiptap-markdown";
 
 type SerializeArgs = Parameters<MarkdownNodeSpec["serialize"]>;
@@ -31,6 +37,21 @@ const PHRASING_TAGS = new Set([
 function serializeSource(state: SerializeArgs[0], node: SerializeArgs[1]) {
   state.text(String(node.attrs.source).replace(/\n$/, ""), false);
   if (node.isBlock) state.closeBlock(node);
+}
+
+function isEditorTable(source: string, schema: Schema): boolean {
+  if (!/^<table[\s>]/i.test(source)) return false;
+  const parse = (html: string) =>
+    new window.DOMParser().parseFromString(html, "text/html").body;
+  const table = parse(
+    getHTMLFromFragment(
+      DOMParser.fromSchema(schema).parse(parse(source)).content,
+      schema,
+    ),
+  ).firstElementChild;
+  if (!table) return false;
+  table.innerHTML = `\n${table.innerHTML}\n`;
+  return table.outerHTML === source.replace(/\n$/, "");
 }
 
 function phrasingTag(source: string): string | undefined {
@@ -110,12 +131,14 @@ export const RawHtml = Node.create({
         serialize: serializeSource,
         parse: {
           setup(markdown) {
+            const { schema } = this.editor;
             markdown.renderer.rules.html_block = (tokens, index) => {
               const source = tokens[index]!.content;
               if (
                 /^<div data-simple-html-embed="true" data-src="[^"]*" data-height="\d+"><\/div>\s*$/.test(
                   source,
-                )
+                ) ||
+                isEditorTable(source, schema)
               ) {
                 return source;
               }
@@ -133,16 +156,16 @@ export const RawInlineHtml = RawHtml.extend({
   group: "inline",
   inline: true,
   parseHTML() {
-    return [{ tag: "span[data-docs-raw-html]" }];
+    return [
+      { tag: "span[data-docs-raw-html]" },
+      { tag: "br[data-docs-raw-html]", priority: 60 },
+    ];
   },
   renderHTML({ node }) {
+    const source = String(node.attrs.source);
     return [
-      "span",
-      {
-        "data-docs-raw-html": "true",
-        "data-source": String(node.attrs.source),
-      },
-      String(node.attrs.source),
+      /^<br\s*\/?>$/i.test(source) ? "br" : "span",
+      { "data-docs-raw-html": "true", "data-source": source },
     ];
   },
   addNodeView() {

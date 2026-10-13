@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
+import Table from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
 import { Markdown } from "tiptap-markdown";
 import { describe, expect, it } from "vitest";
 import { RawHtml, RawHtmlMark, RawInlineHtml } from "./raw-html";
@@ -9,6 +13,10 @@ function createEditor(content: string) {
   return new Editor({
     extensions: [
       StarterKit,
+      Table,
+      TableRow,
+      TableHeader,
+      TableCell,
       RawHtml,
       RawInlineHtml,
       RawHtmlMark,
@@ -126,6 +134,39 @@ describe("raw HTML blocks", () => {
     try {
       expect(editor.view.dom.textContent).toContain("<");
       expect(editor.storage.markdown.getMarkdown()).toBe(content);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("keeps a table it saved as HTML editable and its inline HTML intact", () => {
+    const editor = createEditor(
+      "| a | b |\n| --- | --- |\n| one<br>two | <kbd>k</kbd> <video src=\"v.mp4\"></video> |",
+    );
+    try {
+      let end = 0;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.isText && node.text === "b") end = pos + 1;
+      });
+      editor.chain().setTextSelection(end).splitBlock().run();
+      const saved: string = editor.storage.markdown.getMarkdown();
+      expect(saved).toMatch(/^<table/);
+      editor.commands.setContent(saved);
+      expect(editor.view.dom.querySelector("table td br")).not.toBeNull();
+      expect(editor.view.dom.querySelector("table kbd")?.textContent).toBe("k");
+      expect(editor.view.dom.textContent).toContain('<video src="v.mp4">');
+      expect(editor.storage.markdown.getMarkdown()).toBe(saved);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("preserves a hand-written HTML table as source", () => {
+    const table = '<table>\n<tr><td align="right">x</td></tr>\n</table>';
+    const editor = createEditor(`${table}\n\nAfter.`);
+    try {
+      expect(editor.view.dom.querySelector("table")).toBeNull();
+      expect(editor.storage.markdown.getMarkdown()).toContain(table);
     } finally {
       editor.destroy();
     }
