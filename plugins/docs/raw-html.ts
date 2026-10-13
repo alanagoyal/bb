@@ -7,7 +7,9 @@ type MarkdownIt = Parameters<
   NonNullable<NonNullable<MarkdownNodeSpec["parse"]>["setup"]>
 >[0];
 
-const MARKER = globalThis.crypto.randomUUID();
+const MARKER = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)))
+  .map((byte) => byte.toString(16).padStart(2, "0"))
+  .join("");
 
 const PHRASING_TAGS = new Set([
   "a",
