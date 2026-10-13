@@ -7,7 +7,12 @@ import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import { Markdown } from "tiptap-markdown";
 import { describe, expect, it } from "vitest";
-import { RawHtml, RawHtmlMark, RawInlineHtml } from "./raw-html";
+import {
+  RawHtml,
+  RawHtmlMark,
+  RawInlineHtml,
+  restoreRawHtml,
+} from "./raw-html";
 
 function createEditor(content: string) {
   return new Editor({
@@ -92,6 +97,8 @@ describe("raw HTML blocks", () => {
     ["<sub>2</sub>", "sub", "2"],
     ['<a href="https://x.dev" target="_blank">docs</a>', "a", "docs"],
     ["<span>**bold** in span</span>", "span strong", "bold"],
+    ["**Press <kbd>Ctrl</kbd> now**", "kbd", "Ctrl"],
+    ["*H<sub>2</sub>O*", "sub", "2"],
   ])(
     "displays inline formatting tag %s and saves its exact source",
     (html, selector, text) => {
@@ -139,22 +146,48 @@ describe("raw HTML blocks", () => {
     }
   });
 
-  it("keeps a table it saved as HTML editable and its inline HTML intact", () => {
+  function splitHeaderCell(editor: Editor) {
+    let end = 0;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "b") end = pos + 1;
+    });
+    editor.chain().setTextSelection(end).splitBlock().run();
+  }
+
+  it("keeps a table it saved as HTML editable", () => {
     const editor = createEditor(
-      "| a | b |\n| --- | --- |\n| one<br>two | <kbd>k</kbd> <video src=\"v.mp4\"></video> |",
+      "| a | b |\n| --- | --- |\n| one<br>two | <strong>s</strong> |",
     );
     try {
-      let end = 0;
-      editor.state.doc.descendants((node, pos) => {
-        if (node.isText && node.text === "b") end = pos + 1;
-      });
-      editor.chain().setTextSelection(end).splitBlock().run();
-      const saved: string = editor.storage.markdown.getMarkdown();
+      splitHeaderCell(editor);
+      const saved = restoreRawHtml(editor.storage.markdown.getMarkdown());
       expect(saved).toMatch(/^<table/);
+      expect(saved).toContain("one<br>two");
+      expect(saved).toContain("<strong>s</strong>");
+      expect(saved).not.toContain("data-docs-");
       editor.commands.setContent(saved);
       expect(editor.view.dom.querySelector("table td br")).not.toBeNull();
-      expect(editor.view.dom.querySelector("table kbd")?.textContent).toBe("k");
-      expect(editor.view.dom.textContent).toContain('<video src="v.mp4">');
+      expect(restoreRawHtml(editor.storage.markdown.getMarkdown())).toBe(saved);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("writes original inline HTML when a table is saved as HTML", () => {
+    const cells = [
+      '<a href="https://x.test" target="_blank">x</a>',
+      '<kbd>k</kbd> <video src="v.mp4"></video>',
+    ];
+    const editor = createEditor(
+      `| a | b |\n| --- | --- |\n| ${cells[0]} | ${cells[1]} |`,
+    );
+    try {
+      splitHeaderCell(editor);
+      const saved = restoreRawHtml(editor.storage.markdown.getMarkdown());
+      for (const cell of cells) expect(saved).toContain(cell);
+      expect(saved).not.toContain("data-docs-");
+      editor.commands.setContent(saved);
+      expect(editor.view.dom.querySelector("table")).toBeNull();
       expect(editor.storage.markdown.getMarkdown()).toBe(saved);
     } finally {
       editor.destroy();

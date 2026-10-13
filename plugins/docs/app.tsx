@@ -57,7 +57,12 @@ import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import { Markdown } from "tiptap-markdown";
-import { RawHtml, RawHtmlMark, RawInlineHtml } from "./raw-html.js";
+import {
+  RawHtml,
+  RawHtmlMark,
+  RawInlineHtml,
+  restoreRawHtml,
+} from "./raw-html.js";
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import { toast } from "sonner";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
@@ -193,7 +198,7 @@ function displayMarkdown(
   return withImages.replace(
     /^::html\{src="([^"]+)"(?: height="(\d+)")?\}\s*$/gm,
     (_match, source: string, height: string | undefined) =>
-      `<div data-simple-html-embed="true" data-src="${encodeURIComponent(source)}" data-height="${height ?? "360"}"></div>`,
+      `<div data-simple-html-embed="true" data-src="${encodeURIComponent(source)}" data-height="${height ?? "360"}"></div>\n`,
   );
 }
 
@@ -555,7 +560,7 @@ function TiptapEditor(props: {
         current.frontmatter +
         leadingBreaks +
         storedMarkdown(
-          editor.storage.markdown.getMarkdown(),
+          restoreRawHtml(editor.storage.markdown.getMarkdown()),
           previewBaseUrl,
           notePath,
         )

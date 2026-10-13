@@ -54,6 +54,33 @@ function isEditorTable(source: string, schema: Schema): boolean {
   return table.outerHTML === source.replace(/\n$/, "");
 }
 
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  quot: '"',
+  lt: "<",
+  gt: ">",
+  nbsp: "\u00a0",
+};
+
+function decodeAttribute(value: string): string {
+  return value.replace(
+    /&(amp|quot|lt|gt|nbsp);/g,
+    (_match, name: string) => ENTITIES[name]!,
+  );
+}
+
+export function restoreRawHtml(markdown: string): string {
+  return markdown
+    .replace(
+      /<span data-docs-raw-html="true" data-source="([^"]*)">[^<]*<\/span>/g,
+      (_match, source: string) => decodeAttribute(source),
+    )
+    .replace(
+      /<[a-z]+ data-docs-html-open="([^"]*)" data-docs-html-close="[^"]*">/g,
+      (_match, open: string) => decodeAttribute(open),
+    );
+}
+
 function phrasingTag(source: string): string | undefined {
   const tag = /^<([a-z]+)(?:\s[^>]*)?>$/i.exec(source)?.[1]?.toLowerCase();
   return tag && !source.endsWith("/>") && PHRASING_TAGS.has(tag)
@@ -66,7 +93,6 @@ function closingIndex(
   index: number,
   tag: string,
 ): number | undefined {
-  const closing = new RegExp(`^</${tag}\\s*>$`, "i");
   let depth = 0;
   let nesting = 0;
   let hasText = false;
@@ -77,7 +103,7 @@ function closingIndex(
       if (nesting < 0) return undefined;
       hasText ||= token.type === "text" && token.content.length > 0;
     } else if (phrasingTag(token.content) === tag) depth++;
-    else if (closing.test(token.content)) {
+    else if (token.content === `</${tag}>`) {
       if (depth > 0) depth--;
       else return nesting === 0 && hasText ? next : undefined;
     }
@@ -156,16 +182,14 @@ export const RawInlineHtml = RawHtml.extend({
   group: "inline",
   inline: true,
   parseHTML() {
-    return [
-      { tag: "span[data-docs-raw-html]" },
-      { tag: "br[data-docs-raw-html]", priority: 60 },
-    ];
+    return [{ tag: "span[data-docs-raw-html]" }];
   },
   renderHTML({ node }) {
     const source = String(node.attrs.source);
     return [
-      /^<br\s*\/?>$/i.test(source) ? "br" : "span",
+      "span",
       { "data-docs-raw-html": "true", "data-source": source },
+      source,
     ];
   },
   addNodeView() {
@@ -242,6 +266,7 @@ export const RawHtmlMark = Mark.create({
         serialize: {
           open: (_state, mark) => String(mark.attrs.open),
           close: (_state, mark) => String(mark.attrs.close),
+          mixable: true,
         },
       } satisfies MarkdownMarkSpec,
     };
