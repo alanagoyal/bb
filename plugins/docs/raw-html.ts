@@ -1,9 +1,4 @@
-import {
-  Mark,
-  Node,
-  getHTMLFromFragment,
-  mergeAttributes,
-} from "@tiptap/core";
+import { Mark, Node, getHTMLFromFragment } from "@tiptap/core";
 import { DOMParser, type Schema } from "@tiptap/pm/model";
 import type { MarkdownMarkSpec, MarkdownNodeSpec } from "tiptap-markdown";
 
@@ -127,14 +122,12 @@ export const RawHtml = Node.create({
   parseHTML() {
     return [{ tag: "div[data-docs-raw-html]" }];
   },
-  renderHTML({ node, HTMLAttributes }) {
+  renderHTML({ node }) {
+    const source = String(node.attrs.source);
     return [
       "div",
-      mergeAttributes(HTMLAttributes, {
-        "data-docs-raw-html": "true",
-        "data-source": String(node.attrs.source),
-      }),
-      ["pre", {}, String(node.attrs.source)],
+      { "data-docs-raw-html": "true", "data-source": source },
+      ["pre", {}, source],
     ];
   },
   addNodeView() {

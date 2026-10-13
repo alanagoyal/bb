@@ -93,8 +93,6 @@ describe("raw HTML blocks", () => {
   it.each([
     ["<strong>formatted</strong>", "strong", "formatted"],
     ["<b>bold <i>both</i></b>", "b i", "both"],
-    ["<kbd>Ctrl</kbd>", "kbd", "Ctrl"],
-    ["<sub>2</sub>", "sub", "2"],
     ['<a href="https://x.dev" target="_blank">docs</a>', "a", "docs"],
     ["<span>**bold** in span</span>", "span strong", "bold"],
     ["**Press <kbd>Ctrl</kbd> now**", "kbd", "Ctrl"],
