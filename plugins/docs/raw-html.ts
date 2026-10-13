@@ -1,5 +1,6 @@
 import { Mark, Node, getHTMLFromFragment } from "@tiptap/core";
 import { DOMParser, type Schema } from "@tiptap/pm/model";
+import { Plugin } from "@tiptap/pm/state";
 import type { MarkdownMarkSpec, MarkdownNodeSpec } from "tiptap-markdown";
 
 type SerializeArgs = Parameters<MarkdownNodeSpec["serialize"]>;
@@ -83,27 +84,54 @@ function phrasingTag(source: string): string | undefined {
     : undefined;
 }
 
-function closingIndex(
-  tokens: InlineToken[],
-  index: number,
-  tag: string,
-): number | undefined {
-  let depth = 0;
-  let nesting = 0;
-  let hasText = false;
-  for (let next = index + 1; next < tokens.length; next++) {
-    const token = tokens[next]!;
+function pairTags(tokens: InlineToken[]): Map<number, number> {
+  const pairs = new Map<number, number>();
+  const stack: { tag: string; index: number; level: number; text: number }[] =
+    [];
+  const counts = new Map<string, number>();
+  const key = (tag: string, level: number) => `${level}:${tag}`;
+  const pop = () => {
+    const entry = stack.pop()!;
+    const entryKey = key(entry.tag, entry.level);
+    counts.set(entryKey, counts.get(entryKey)! - 1);
+    return entry;
+  };
+  let level = 0;
+  let text = 0;
+  tokens.forEach((token, index) => {
     if (token.type !== "html_inline") {
-      nesting += token.nesting;
-      if (nesting < 0) return undefined;
-      hasText ||= token.type === "text" && token.content.length > 0;
-    } else if (phrasingTag(token.content) === tag) depth++;
-    else if (token.content === `</${tag}>`) {
-      if (depth > 0) depth--;
-      else return nesting === 0 && hasText ? next : undefined;
+      level += token.nesting;
+      while (stack.length > 0 && stack.at(-1)!.level > level) pop();
+      if (token.type === "text" && token.content) text++;
+      return;
     }
+    const tag = phrasingTag(token.content);
+    if (tag) {
+      stack.push({ tag, index, level, text });
+      counts.set(key(tag, level), (counts.get(key(tag, level)) ?? 0) + 1);
+      return;
+    }
+    const closing = /^<\/([a-z]+)>$/.exec(token.content)?.[1];
+    if (!closing || !counts.get(key(closing, level))) return;
+    let entry = pop();
+    while (entry.tag !== closing) entry = pop();
+    if (entry.text < text) {
+      pairs.set(entry.index, index);
+      pairs.set(index, -1);
+    }
+  });
+  return pairs;
+}
+
+const pairsByTokens = new WeakMap<InlineToken[], Map<number, number>>();
+
+function stripPastedSources(html: string): string {
+  const body = new window.DOMParser().parseFromString(html, "text/html").body;
+  for (const element of body.querySelectorAll("[data-docs-html-open]")) {
+    element.removeAttribute("data-docs-html-open");
+    element.removeAttribute("data-docs-html-close");
   }
-  return undefined;
+  return body.innerHTML;
 }
 
 export const RawHtml = Node.create({
@@ -146,18 +174,30 @@ export const RawHtml = Node.create({
   },
   addStorage() {
     return {
+      tables: new Map<string, boolean>(),
       markdown: {
         serialize: serializeSource,
         parse: {
           setup(markdown) {
-            const { schema } = this.editor;
+            const { schema, storage } = this.editor;
+            const previous: Map<string, boolean> = storage.rawHtml.tables;
+            const tables = new Map<string, boolean>();
+            storage.rawHtml.tables = tables;
+            const isEditable = (source: string) => {
+              const editable =
+                tables.get(source) ??
+                previous.get(source) ??
+                isEditorTable(source, schema);
+              tables.set(source, editable);
+              return editable;
+            };
             markdown.renderer.rules.html_block = (tokens, index) => {
               const source = tokens[index]!.content;
               if (
                 /^<div data-simple-html-embed="true" data-src="[^"]*" data-height="\d+"><\/div>\s*$/.test(
                   source,
                 ) ||
-                isEditorTable(source, schema)
+                isEditable(source)
               ) {
                 return source;
               }
@@ -205,15 +245,15 @@ export const RawInlineHtml = RawHtml.extend({
           setup(markdown) {
             const escape = markdown.utils.escapeHtml;
             markdown.renderer.rules.html_inline = (tokens, index) => {
+              let pairs = pairsByTokens.get(tokens);
+              if (!pairs) {
+                pairs = pairTags(tokens);
+                pairsByTokens.set(tokens, pairs);
+              }
               const token = tokens[index]!;
-              if (token.meta?.docsHtmlClose) return "</span>";
-              const tag = phrasingTag(token.content);
-              const close =
-                tag === undefined
-                  ? undefined
-                  : closingIndex(tokens, index, tag);
+              const close = pairs.get(index);
+              if (close === -1) return "</span>";
               if (close !== undefined) {
-                tokens[close]!.meta = { docsHtmlClose: true };
                 return `<span data-docs-html-open="${escape(token.content)}" data-docs-html-close="${escape(tokens[close]!.content)}">`;
               }
               return `<span data-docs-raw-html="true" data-source="${escape(token.content)}"></span>`;
@@ -252,6 +292,11 @@ export const RawHtmlMark = Mark.create({
   },
   renderHTML({ mark, HTMLAttributes }) {
     return [phrasingTag(String(mark.attrs.open)) ?? "span", HTMLAttributes, 0];
+  },
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({ props: { transformPastedHTML: stripPastedSources } }),
+    ];
   },
   addStorage() {
     return {

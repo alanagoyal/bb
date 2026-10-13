@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { Editor } from "@tiptap/core";
+import { DOMParser as ProseMirrorDOMParser } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import Table from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
@@ -133,6 +134,7 @@ describe("raw HTML blocks", () => {
   it.each([
     'Anchor <a name="top"></a> here.',
     "Bad <b>a **c</b> d** end.",
+    "Mis-nested <b>a <i>b</b> c</i> end.",
     "<video controls>fallback</video> after.",
   ])("shows unsupported or unpaired inline HTML as source: %s", (content) => {
     const editor = createEditor(content);
@@ -198,6 +200,40 @@ describe("raw HTML blocks", () => {
     try {
       expect(editor.view.dom.querySelector("table")).toBeNull();
       expect(editor.storage.markdown.getMarkdown()).toContain(table);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("pairs thousands of unclosed inline tags in linear time", () => {
+    const editor = createEditor("");
+    try {
+      const started = performance.now();
+      editor.storage.markdown.parser.parse(
+        `x${'<a href="#">'.repeat(20_000)}`,
+      );
+      expect(performance.now() - started).toBeLessThan(3_000);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("drops hidden HTML sources from pasted content", () => {
+    const editor = createEditor("");
+    try {
+      let html = `<p>see <span data-docs-html-open='<a href="https://evil.example" onmouseover="alert(1)">' data-docs-html-close="</a>">this</span> ok</p>`;
+      editor.view.someProp("transformPastedHTML", (transform) => {
+        html = transform(html, editor.view);
+      });
+      const pasted = new window.DOMParser().parseFromString(html, "text/html");
+      editor.view.dispatch(
+        editor.state.tr.replaceSelection(
+          ProseMirrorDOMParser.fromSchema(editor.schema).parseSlice(
+            pasted.body,
+          ),
+        ),
+      );
+      expect(editor.storage.markdown.getMarkdown()).toBe("see this ok");
     } finally {
       editor.destroy();
     }
